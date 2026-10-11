@@ -1,0 +1,49 @@
+{
+  "name": "dsh-tamer",
+  "version": "0.1.1",
+  "private": true,
+  "description": "AI驯服工具 · DSH 插件：把工作协议注入每个 Agent 会话（三档分级 / 外部记忆 / 每 N 轮重申 / 来源校验打回 / 留痕归档）",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "src",
+    "cordis.patch.yml",
+    "dsh.plugin.json",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "README.zh.md"
+  ],
+  "scripts": {
+    "gen": "node scripts/gen-protocol.mjs",
+    "check:protocol": "node scripts/gen-protocol.mjs --check",
+    "check:syntax": "node --check index.js",
+    "test": "node --test \"tests/*.test.mjs\"",
+    "verify": "npm run check:protocol && npm run check:syntax && npm run test",
+    "check": "node scripts/check.mjs",
+    "pack": "node scripts/pack.mjs",
+    "verify:saddle": "pwsh -NoProfile -File scripts/verify-saddle.ps1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  }
+}

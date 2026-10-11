@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Tamer Protocol">
+  <title>Tamer Protocol</title>
+  <rect width="64" height="64" rx="14" fill="#1f2329"/>
+  <!-- 马鞍：驯服工具的原始意象（原创图形） -->
+  <path d="M14 40c0-11 8-19 18-19s18 8 18 19" fill="none" stroke="#3370ff" stroke-width="4" stroke-linecap="round"/>
+  <path d="M25 40c0-4 3-7 7-7s7 3 7 7" fill="none" stroke="#f7f8fa" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M14 46h36" stroke="#3370ff" stroke-width="4" stroke-linecap="round"/>
+  <!-- 缰绳 -->
+  <path d="M43 27c5-3 9-8 10-14" fill="none" stroke="#f7f8fa" stroke-width="3" stroke-linecap="round" stroke-dasharray="4 4"/>
+</svg>

@@ -1,0 +1,30 @@
+# dsh-tamer · 组合补丁
+#
+# 把本插件插入组合树。`id` 是插件行标识，`name` 是包名（必须与 index.js 的
+# `export const name` 一致）。config 为纯 YAML，由 src/config.js 自行校验——
+# v0.1 刻意不导出 Cordis 的 Config（schemastery）schema，以保持零依赖。
+#
+# 改完本文件后：profile 开了 HMR 会秒级重组；否则重启 dsh。
+# 关闭插件：给这一行加 `disabled: true`，或在插件管理页按开关（会写进 profile 补丁层）。
+#
+# Windows 路径请用正斜杠或单引号，避免 YAML 转义问题。
+- insert:
+    - id: dsh-tamer
+      name: dsh-tamer
+      config:
+        # 默认档位：fast | standard | strict
+        mode: standard
+        # 来源校验姿态：off 不校验 / warn 打回一次（推荐默认） / strict 最多打回两次
+        censor: warn
+        # 每 N 轮重申协议；0 = 关闭（默认关闭：协议段每个请求都会注入，重申基本冗余）
+        # 原设计是给"只能注入一次"的网页插件用的补丁；这里需要时再加大，例如 30
+        reinjectEvery: 0
+        # 协议段在系统提示词中的排序位（外部贡献可用任意有限值）
+        protocolOrder: 9000
+        # 涉及客观信息却未检索来源就要动文件/执行命令时：off 只观察 / ask 先问一次
+        execGate: off
+        # 留空 = 自动探测 <会话 cwd>/记忆库/约定.md
+        memoryFile: ''
+        # 留空 = 自动探测 <会话 cwd>/留痕仓库
+        archiveRoot: ''
+        archiveCopyFiles: true

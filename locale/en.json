@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Tamer Protocol",
+    "description": "Injects the AI Taming work protocol (clarify-first, source-verifiable, owner-decides, iterate) into every agent session, with three strictness modes, an external memory file, periodic re-assertion, and a source-citation check that sends an answer back for revision."
+  }
+}

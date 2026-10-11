@@ -1,0 +1,11 @@
+{
+  "name": "dsh-tamer",
+  "description": "Injects the AI Taming work protocol into every agent session with three modes, external memory, periodic re-assertion, and a source-citation check that sends an answer back for revision.",
+  "version": "0.1.0",
+  "entry": {
+    "name": "dsh-tamer",
+    "inject": [
+      "systemPrompt"
+    ]
+  }
+}
