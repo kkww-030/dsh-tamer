@@ -87,8 +87,8 @@ test('applyTamer 注册协议段 / 档位命令 / 留痕工具', () => {
   assert.equal(reg.sections[0].interpolate, false)
   assert.equal(reg.commands.length, 1)
   assert.equal(reg.commands[0].name, 'tamer')
-  assert.equal(reg.tools.length, 1)
-  assert.equal(reg.tools[0].name, 'tamer_archive')
+  assert.equal(reg.tools.length, 3)
+  assert.deepEqual(reg.tools.map((t) => t.name), ['tamer_archive', 'tamer_preflight', 'tamer_finalize'])
   dispose()
 })
 
@@ -97,7 +97,7 @@ test('缺少宿主 API 时用内置消息工厂，装配照常且不抛错', () 
   const { ctx, reg } = fakeCtx()
   const dispose = applyTamer(ctx, {}, {})
   assert.equal(reg.sections.length, 1)
-  assert.equal(reg.tools.length, 1)
+  assert.equal(reg.tools.length, 3)
   assert.equal(typeof dispose, 'function')
   dispose()
 })
@@ -498,6 +498,119 @@ test('tamer_archive 工具定义合法且能落盘', async () => {
   assert.match(path.replace(/\\/gu, '/'), /留痕仓库\/测试项目\/来源登记_/u)
 })
 
+/* ── 移植自 trae-tamer：开工自检 / 交付自检 / 两条合规豁免 ───────────── */
+
+const toolByName = (reg, name) => reg.tools.find((t) => t.name === name)
+
+test('tamer_preflight / tamer_finalize 的参数契约与回执', async () => {
+  const { ctx, reg } = fakeCtx()
+  applyTamer(ctx, {}, api)
+  const preflight = toolByName(reg, 'tamer_preflight')
+  const finalize = toolByName(reg, 'tamer_finalize')
+  assert.deepEqual(preflight.parameters.required, ['objective'])
+  assert.equal(preflight.parameters.properties.objective.type, 'boolean')
+  assert.deepEqual(finalize.parameters.required, ['reply_text'])
+
+  const agent = fakeAgent(tempDir())
+  assert.match(await preflight.execute({ objective: true, task: '查引脚' }, { agent }), /涉及客观信息/u)
+  assert.match(await preflight.execute({ objective: false }, { agent }), /非客观信息任务/u)
+})
+
+test('tamer_finalize：客观任务缺来源 → warn；归档后 → pass', async () => {
+  const { ctx, reg } = fakeCtx()
+  applyTamer(ctx, {}, api)
+  const agent = fakeAgent(tempDir())
+
+  await toolByName(reg, 'tamer_preflight').execute({ objective: true }, { agent })
+  const warn = await toolByName(reg, 'tamer_finalize').execute({ reply_text: '大概是 3.3V。' }, { agent })
+  assert.match(warn, /【warn】/u)
+  assert.match(warn, /下一步/u)
+
+  await toolByName(reg, 'tamer_archive').execute(
+    { project: 'p', source: 'ST', link: 'https://st.com/x' },
+    { agent, signal: { aborted: false } },
+  )
+  const pass = await toolByName(reg, 'tamer_finalize').execute({ reply_text: '大概是 3.3V。' }, { agent })
+  assert.match(pass, /【pass】/u)
+  assert.match(pass, /已归档/u)
+})
+
+test('本轮已归档 → 回复里没列来源也不打回', async () => {
+  const { ctx, reg, fire } = fakeCtx()
+  applyTamer(ctx, { censor: 'warn' }, api)
+  const agent = fakeAgent(tempDir())
+  await fire('agent/created', { agent })
+  await fire('agent/pre-step', { agent, messages: [userMessage('这个芯片的引脚定义是什么')] })
+  await toolByName(reg, 'tamer_archive').execute(
+    { project: 'p', source: 'ST 手册', link: 'https://st.com/x' },
+    { agent, signal: { aborted: false } },
+  )
+  await fire('agent/assistant-stream', {
+    agent,
+    frame: { type: 'chunk', chunk: { type: 'text-delta', text: '引脚定义如下。' } },
+  })
+  await fire('agent/turn-stopping', { agent, turn: 1 })
+  assert.equal(agent.steered.length, 0, '已归档即合规')
+})
+
+test('只在行文里提「出处」不算已列来源 → 仍打回（2026-10-11 真机误判回归）', async () => {
+  const { ctx, fire } = fakeCtx()
+  applyTamer(ctx, { censor: 'warn' }, api)
+  const agent = fakeAgent(tempDir())
+  await fire('agent/created', { agent })
+  await fire('agent/pre-step', {
+    agent,
+    messages: [userMessage('查一下这个器件的规格参数，但回复里不要列任何来源')],
+  })
+  await fire('agent/assistant-stream', {
+    agent,
+    frame: { type: 'chunk', chunk: { type: 'text-delta', text: '先把几个材料常数的出处核验到位。' } },
+  })
+  await fire('agent/turn-stopping', { agent, turn: 1 })
+  assert.equal(agent.steered.length, 1, '结构化判定应识破这种假阳性')
+})
+
+test('诚实声明「未找到可靠来源」不打回（惩罚诚实才是缺陷）', async () => {
+  const { ctx, fire } = fakeCtx()
+  applyTamer(ctx, { censor: 'strict' }, api)
+  const agent = fakeAgent(tempDir())
+  await fire('agent/created', { agent })
+  await fire('agent/pre-step', { agent, messages: [userMessage('这个芯片的引脚定义是什么')] })
+  await fire('agent/assistant-stream', {
+    agent,
+    frame: { type: 'chunk', chunk: { type: 'text-delta', text: '这个型号很冷门，未找到可靠来源。' } },
+  })
+  await fire('agent/turn-stopping', { agent, turn: 1 })
+  assert.equal(agent.steered.length, 0)
+})
+
+test("censorAction='log'：缺来源只记账，不打扰对话（trae-tamer 式自检优先）", async () => {
+  const { ctx, fire } = fakeCtx()
+  applyTamer(ctx, { censor: 'warn', censorAction: 'log' }, api)
+  const agent = fakeAgent(tempDir())
+  await fire('agent/created', { agent })
+  await fire('agent/pre-step', { agent, messages: [userMessage('这个芯片的引脚定义是什么')] })
+  await fire('agent/assistant-stream', {
+    agent,
+    frame: { type: 'chunk', chunk: { type: 'text-delta', text: '据我所知是这样。' } },
+  })
+  await fire('agent/turn-stopping', { agent, turn: 1 })
+  assert.equal(agent.steered.length, 0, 'log 模式不 steer')
+
+  // 同样条件下默认 steer 会打回：确保两个模式真的不同
+  const strictCase = fakeCtx()
+  applyTamer(strictCase.ctx, { censor: 'warn' }, api)
+  const agent2 = fakeAgent(tempDir())
+  await strictCase.fire('agent/created', { agent: agent2 })
+  await strictCase.fire('agent/pre-step', { agent: agent2, messages: [userMessage('这个芯片的引脚定义是什么')] })
+  await strictCase.fire('agent/assistant-stream', {
+    agent: agent2,
+    frame: { type: 'chunk', chunk: { type: 'text-delta', text: '据我所知是这样。' } },
+  })
+  await strictCase.fire('agent/turn-stopping', { agent: agent2, turn: 1 })
+  assert.equal(agent2.steered.length, 1)
+})
+
 test('tamer_archive 在取消信号下拒绝执行', async () => {
   const { ctx, reg } = fakeCtx()
   applyTamer(ctx, {}, api)
@@ -517,4 +630,95 @@ test('lastUserText 跳过本插件自己注入的消息', () => {
   assert.equal(lastUserText(messages), '真正的提问：引脚定义')
   assert.equal(lastUserText([userMessage('只有插件消息', { kind: 'dsh-tamer' })]), '')
   assert.equal(textOfMessage({ content: [{ type: 'text', text: 'a' }, { type: 'image' }] }), 'a')
+})
+
+/* ── v0.3.0：三态声明 / 档位持久化 / 上下文带路径 / 状态快照 ───────── */
+
+test('finalize：未调 preflight 且正文像客观信息 → warn（修掉 v0.2.0 的假通过）', async () => {
+  const { ctx, reg } = fakeCtx()
+  applyTamer(ctx, {}, api)
+  const agent = fakeAgent(tempDir())
+  const out = await toolByName(reg, 'tamer_finalize').execute(
+    { reply_text: '据 arXiv 论文，该参数约为 0.3。' },
+    { agent },
+  )
+  assert.match(out, /【warn】/u)
+  assert.match(out, /尚未调用 tamer_preflight/u)
+})
+
+test('finalize：显式 preflight(objective=false) 后，标准档信任声明 → pass', async () => {
+  const { ctx, reg } = fakeCtx()
+  applyTamer(ctx, { mode: 'standard' }, api)
+  const agent = fakeAgent(tempDir())
+  await toolByName(reg, 'tamer_preflight').execute({ objective: false }, { agent })
+  const out = await toolByName(reg, 'tamer_finalize').execute(
+    { reply_text: '据 arXiv 论文，该参数约为 0.3。' },
+    { agent },
+  )
+  assert.match(out, /【pass】/u)
+})
+
+test('档位按工作区持久化：切档后同工作区的新会话沿用', async () => {
+  const cwd = tempDir()
+  const first = fakeCtx()
+  applyTamer(first.ctx, {}, api)
+  const agentA = fakeAgent(cwd)
+  await first.fire('agent/created', { agent: agentA })
+  first.reg.commands[0].handler({ agent: agentA, rawInput: 'strict' })
+
+  const second = fakeCtx()
+  applyTamer(second.ctx, {}, api)
+  const agentB = fakeAgent(cwd)
+  await second.fire('agent/created', { agent: agentB })
+  assert.match(second.reg.commands[0].handler({ agent: agentB, rawInput: 'status' }).text, /档位：strict/u)
+})
+
+test('persistMode=false 时每个会话回到 config.mode', async () => {
+  const cwd = tempDir()
+  const first = fakeCtx()
+  applyTamer(first.ctx, { persistMode: false }, api)
+  const agentA = fakeAgent(cwd)
+  await first.fire('agent/created', { agent: agentA })
+  first.reg.commands[0].handler({ agent: agentA, rawInput: 'strict' })
+
+  const second = fakeCtx()
+  applyTamer(second.ctx, { persistMode: false }, api)
+  const agentB = fakeAgent(cwd)
+  await second.fire('agent/created', { agent: agentB })
+  assert.match(second.reg.commands[0].handler({ agent: agentB, rawInput: 'status' }).text, /档位：standard/u)
+})
+
+test('注入上下文带解析出的记忆库/留痕仓库路径（让模型自己核对工作区）', async () => {
+  const { ctx, fire } = fakeCtx()
+  applyTamer(ctx, {}, api)
+  const agent = fakeAgent(tempDir())
+  await fire('agent/created', { agent })
+  const injected = agent.injected.map(text).join('\n')
+  assert.match(injected, /路径核对/u)
+  assert.match(injected, /记忆库/u)
+  assert.match(injected, /留痕仓库/u)
+})
+
+test('tamer_preflight 记账（可统计"有没有先声明"）', async () => {
+  const { ctx, reg } = fakeCtx()
+  applyTamer(ctx, {}, api)
+  const agent = fakeAgent(tempDir())
+  await toolByName(reg, 'tamer_preflight').execute({ objective: true, task: '查引脚' }, { agent })
+  const logPath = join(process.env.DSH_HOME, 'dsh-tamer-load.log')
+  assert.ok(existsSync(logPath))
+  assert.match(readFileSync(logPath, 'utf8'), /"event":"preflight"/u)
+})
+
+test('轮次收尾写状态快照（原子写、含档位与轮次）', async () => {
+  const { ctx, fire } = fakeCtx()
+  applyTamer(ctx, {}, api)
+  const agent = fakeAgent(tempDir())
+  await fire('agent/created', { agent })
+  await fire('agent/pre-step', { agent, messages: [userMessage('随便聊聊')] })
+  await fire('agent/turn-stopping', { agent, turn: 1 })
+  const snapPath = join(process.env.DSH_HOME, 'dsh-tamer-state.json')
+  assert.ok(existsSync(snapPath))
+  const snap = JSON.parse(readFileSync(snapPath, 'utf8'))
+  assert.equal(snap.mode, 'standard')
+  assert.equal(snap.turn, 1)
 })

@@ -17,8 +17,7 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, '..')
 // 独立分享副本：优先用自带的 protocol/协议注入模板.txt，
-// 这样无论放在工具集仓库里、还是被单独压缩分发，生成物的 PROTOCOL_SOURCE 都一致，
-// 收件人跑 `--check` 也不会因为布局不同而报漂移。
+// 这样无论放在工具集仓库里还是被单独分发，生成物的 PROTOCOL_SOURCE 都一致。
 const sourceCandidates = [
   resolve(root, 'protocol', '协议注入模板.txt'),
   resolve(root, '..', 'core', '协议注入模板.txt'),

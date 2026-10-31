@@ -14,15 +14,11 @@ const sourceCandidates = [
 ]
 const sourcePath = sourceCandidates.find((candidate) => existsSync(candidate)) ?? sourceCandidates[0]
 
-test('生成的协议文本与协议正文逐字节一致（防漂移）', () => {
+test('生成的协议文本与 core/协议注入模板.txt 逐字节一致（防漂移）', () => {
   const source = readFileSync(sourcePath, 'utf8').replace(/\r\n/gu, '\n').trimEnd()
   assert.equal(PROTOCOL_TEXT, source)
   assert.equal(PROTOCOL_SHA256, createHash('sha256').update(source, 'utf8').digest('hex'))
-  // 两种布局都合法：独立分享副本是 protocol/…，工具集同仓时是 ../core/…
-  assert.ok(
-    ['protocol/协议注入模板.txt', '../core/协议注入模板.txt'].includes(PROTOCOL_SOURCE),
-    `PROTOCOL_SOURCE 意外：${PROTOCOL_SOURCE}`,
-  )
+  assert.ok(['protocol/协议注入模板.txt', '../core/协议注入模板.txt'].includes(PROTOCOL_SOURCE), `PROTOCOL_SOURCE 意外：${PROTOCOL_SOURCE}`)
 })
 
 test('协议段包含四条核心与三档', () => {

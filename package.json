@@ -1,6 +1,6 @@
 {
   "name": "dsh-tamer",
-  "version": "0.1.1",
+  "version": "0.3.0",
   "private": true,
   "description": "AI驯服工具 · DSH 插件：把工作协议注入每个 Agent 会话（三档分级 / 外部记忆 / 每 N 轮重申 / 来源校验打回 / 留痕归档）",
   "type": "module",

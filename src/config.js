@@ -12,6 +12,8 @@
 export const MODES = ['fast', 'standard', 'strict']
 export const CENSOR_LEVELS = ['off', 'warn', 'strict']
 export const EXEC_GATES = ['off', 'ask']
+/** 判定为"缺来源"时的动作：steer 强制重做（默认）/ log 只记账不打扰 */
+export const CENSOR_ACTIONS = ['steer', 'log']
 
 /** 默认配置。每一项都在 README「配置」一节里有说明。 */
 export const DEFAULTS = {
@@ -19,6 +21,13 @@ export const DEFAULTS = {
   mode: 'standard',
   /** 来源校验姿态：off 不校验 / warn 打回一次 / strict 最多打回两次 */
   censor: 'warn',
+  /**
+   * 判定为"缺来源"时做什么。
+   *   - `steer`（默认）：注入纠正指令，强制模型重做一步（DSH 独有的执行级能力）
+   *   - `log`：只在自检日志里记 `censor-warn`，不打扰对话
+   *     （对应 trae-tamer 的"自检优先"路线：不静默重生成、决策权留在主人）
+   */
+  censorAction: 'steer',
   /**
    * 每 N 轮重申协议；0 = 关闭（**默认关闭**）。
    *
@@ -34,10 +43,21 @@ export const DEFAULTS = {
   execGate: 'off',
   /** 外部记忆库路径；留空表示自动探测 <会话 cwd>/记忆库/约定.md */
   memoryFile: '',
-  /** 留痕仓库根目录；留空表示自动探测 <会话 cwd>/留痕仓库 */
+  /** 留痕仓库根目录；留空表示自动探测 <会话 cwd>/留痕仓库（可填绝对路径做全局仓库） */
   archiveRoot: '',
   /** 留痕时是否把 --save-file 指向的原文复制进仓库 */
   archiveCopyFiles: true,
+  /**
+   * 档位是否**按工作区持久化**（借鉴 trae-tamer 的每项目状态）。
+   * 默认开：新会话沿用你上次在该工作区选的档位，不用每次重切；
+   * 关掉则每个会话回到 config.mode。
+   */
+  persistMode: true,
+  /**
+   * 是否把当前状态原子写一份到 `<DSH_HOME>/dsh-tamer-state.json`。
+   * 给人和未来的徽标一个稳定读取面（加载日志是追加式的，不适合当"当前状态"读）。
+   */
+  stateSnapshot: true,
   /** 客观信息关键词；留空用内置表 */
   objectiveWords: null,
   /** “已列出信息来源”的判定词；留空用内置表 */
@@ -107,12 +127,15 @@ export function normalizeConfig(raw, logger) {
   return {
     mode: pickEnum(input.mode, MODES, DEFAULTS.mode, 'mode', logger),
     censor: pickEnum(input.censor, CENSOR_LEVELS, DEFAULTS.censor, 'censor', logger),
+    censorAction: pickEnum(input.censorAction, CENSOR_ACTIONS, DEFAULTS.censorAction, 'censorAction', logger),
     reinjectEvery: pickInt(input.reinjectEvery, DEFAULTS.reinjectEvery, { min: 0, key: 'reinjectEvery' }, logger),
     protocolOrder: pickNumber(input.protocolOrder, DEFAULTS.protocolOrder, 'protocolOrder', logger),
     execGate: pickEnum(input.execGate, EXEC_GATES, DEFAULTS.execGate, 'execGate', logger),
     memoryFile: pickString(input.memoryFile, DEFAULTS.memoryFile, 'memoryFile', logger),
     archiveRoot: pickString(input.archiveRoot, DEFAULTS.archiveRoot, 'archiveRoot', logger),
     archiveCopyFiles: typeof input.archiveCopyFiles === 'boolean' ? input.archiveCopyFiles : DEFAULTS.archiveCopyFiles,
+    persistMode: typeof input.persistMode === 'boolean' ? input.persistMode : DEFAULTS.persistMode,
+    stateSnapshot: typeof input.stateSnapshot === 'boolean' ? input.stateSnapshot : DEFAULTS.stateSnapshot,
     objectiveWords: pickStringList(input.objectiveWords, DEFAULTS.objectiveWords, 'objectiveWords', logger),
     sourceIndicators: pickStringList(input.sourceIndicators, DEFAULTS.sourceIndicators, 'sourceIndicators', logger),
     sourceTools: pickStringList(input.sourceTools, DEFAULTS.sourceTools, 'sourceTools', logger),

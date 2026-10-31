@@ -25,7 +25,7 @@ import { reportLoad } from './src/diagnostics.js'
 export const name = 'dsh-tamer'
 
 /** 与 package.json 的 version 保持一致（scripts/check.mjs 会校验）。 */
-export const VERSION = '0.1.1'
+export const VERSION = '0.3.0'
 
 /**
  * 必需服务：只有系统提示词注册表是硬依赖（协议要挂进去）。

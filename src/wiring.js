@@ -15,13 +15,14 @@
  */
 import { normalizeConfig } from './config.js'
 import { detectModeExact, MODES, normalizeMode } from './modes.js'
-import { evaluateCensor, correctionText } from './censor.js'
+import { evaluateCensor, correctionText, runPreflight, evaluateFinalize } from './censor.js'
 import { appendMemory, readMemory, removeMemory, resolveMemoryPath } from './memory.js'
 import { archiveSource, resolveArchiveRoot } from './archive.js'
 import { beginTurn, stateOf } from './state.js'
 import { modeContextText, protocolSectionText, reinforceText } from './prompt.js'
 import { reportLoad } from './diagnostics.js'
 import { resolveMessageFactory } from './message.js'
+import { savedMode, saveWorkspaceState, writeSnapshot } from './persist.js'
 
 /** 本插件注入消息的来源标记；DSH 会按 kind 判断消息来源。 */
 export const SOURCE_KIND = 'dsh-tamer'
@@ -140,6 +141,46 @@ export function applyTamer(ctx, rawConfig, api) {
     return injectMessage(agent, makeContextMessage(createUserMessage, text), phase)
   }
 
+  /** 上下文文本的**唯一**构造点：档位 + 记忆库 + 解析出的路径（让模型自己核对工作区）。 */
+  function contextTextFor(agent, state) {
+    const memoryPath = memoryPathFor(agent)
+    let entries = []
+    try {
+      entries = readMemory(memoryPath)
+    } catch (error) {
+      log(ctx, 'warn', `读取记忆库失败：${String(error)}`)
+    }
+    return modeContextText(state.mode, entries, { memoryPath, archiveRoot: archiveRootFor(agent) })
+  }
+
+  /**
+   * 按工作区恢复档位（借鉴 trae-tamer 的每项目持久状态）。
+   * 只做一次；工作区持久值优先于 config.mode，让新会话沿用你上次选的档位。
+   */
+  function restoreMode(agent, state) {
+    if (!config.persistMode || state.modeRestored) return
+    state.modeRestored = true
+    try {
+      const saved = savedMode(cwdOf(agent))
+      if (saved && saved !== state.mode) {
+        state.mode = saved
+        log(ctx, 'info', `已恢复该工作区的档位：${saved}`)
+      }
+    } catch (error) {
+      log(ctx, 'warn', `恢复工作区档位失败：${String(error)}`)
+    }
+  }
+
+  /** 切档后把档位写进工作区状态（`persistMode` 关闭时什么都不做）。 */
+  function persistModeOf(agent, state) {
+    if (!config.persistMode) return
+    try {
+      saveWorkspaceState(cwdOf(agent), { mode: state.mode })
+    } catch {
+      /* 持久化失败不影响切档 */
+    }
+  }
+
   /**
    * 首次进入会话的上下文（档位 + 外部记忆库）——**幂等**，已给过就返回 null。
    *
@@ -158,12 +199,16 @@ export function applyTamer(ctx, rawConfig, api) {
     }
     state.memoryHash = hashEntries(entries)
     if (entries.length > 0) log(ctx, 'info', `已注入外部记忆 ${entries.length} 条`)
-    return makeContextMessage(createUserMessage, modeContextText(state.mode, entries))
+    return makeContextMessage(
+      createUserMessage,
+      modeContextText(state.mode, entries, { memoryPath: memoryPathFor(agent), archiveRoot: archiveRootFor(agent) }),
+    )
   }
 
   /** 快路径：`agent/created` 到了就直接注入（正常情况下降落于首个回合）。 */
   function primeAgent(agent) {
     const state = stateOf(agent, config)
+    restoreMode(agent, state)
     injectMessage(agent, ensurePrime(agent, state), 'prime')
   }
 
@@ -178,7 +223,11 @@ export function applyTamer(ctx, rawConfig, api) {
     const next = hashEntries(entries)
     if (next === state.memoryHash) return
     state.memoryHash = next
-    injectContext(agent, modeContextText(state.mode, entries), 'memory-sync')
+    injectContext(
+      agent,
+      modeContextText(state.mode, entries, { memoryPath: memoryPathFor(agent), archiveRoot: archiveRootFor(agent) }),
+      'memory-sync',
+    )
     log(ctx, 'info', '外部记忆库已变更，重新注入')
   }
 
@@ -265,7 +314,8 @@ export function applyTamer(ctx, rawConfig, api) {
     const detected = MODES.includes(word) ? word : detectModeExact(input)
     if (detected) {
       state.mode = normalizeMode(detected, config.mode)
-      injectContext(agent, modeContextText(state.mode, readMemory(memoryPathFor(agent))), 'mode-switch')
+      persistModeOf(agent, state)
+      injectContext(agent, contextTextFor(agent, state), 'mode-switch')
       return { kind: 'success', text: `已切换到【${state.mode}】：${modeHintText(state.mode)}` }
     }
 
@@ -299,13 +349,17 @@ export function applyTamer(ctx, rawConfig, api) {
     try {
       const state = stateOf(payload?.agent, config)
       if (state) {
+        restoreMode(payload?.agent, state)
         const text = lastUserText(payload?.messages)
         if (text) {
           // 自然语言切档**只认精确匹配**（整句就是档位词）。
           // 宽松正则会因 FastAPI / fastboot / "TypeScript strict" 误判成快速档，
           // 而快速档经 censor 直接关掉来源打回——那是静默失效，必须避免。
           const detected = detectModeExact(text)
-          if (detected) state.mode = detected
+          if (detected) {
+            state.mode = detected
+            persistModeOf(payload?.agent, state)
+          }
           if (text !== state.userText) beginTurn(state, text)
         }
         pendingPrime = ensurePrime(payload?.agent, state)
@@ -370,24 +424,44 @@ export function applyTamer(ctx, rawConfig, api) {
         mode: state.mode,
         censor: config.censor,
         retries: state.retries,
+        archivedCount: state.archivedThisTurn,
+        saidNotFound: state.saidNotFound,
         objectiveWords: config.objectiveWords,
         sourceIndicators: config.sourceIndicators,
       })
 
       if (verdict.action === 'retry') {
-        const correction = makeContextMessage(createUserMessage, correctionText(state.mode))
-        if (correction) {
-          state.retries += 1
-          log(ctx, 'info', `来源校验打回第 ${state.retries} 次：${verdict.reason}`)
+        // censorAction='log'：只记账不打扰（trae-tamer 式"自检优先"的选项），
+        // 默认 'steer' 保持强制重做。
+        if (config.censorAction === 'log') {
           if (config.diagnostics !== false) {
-            reportLoad({ event: 'censor-retry', turn: state.lastTurn, retries: state.retries, reason: verdict.reason })
+            reportLoad({ event: 'censor-warn', turn: state.lastTurn, code: verdict.code, reason: verdict.reason })
           }
-          agent?.steer?.(correction)
+          log(ctx, 'info', `来源校验告警（未打扰）：${verdict.reason}`)
         } else {
-          log(ctx, 'warn', `检出「${verdict.reason}」，但缺少 createUserMessage，无法打回`)
+          const correction = makeContextMessage(createUserMessage, correctionText(state.mode))
+          if (correction) {
+            state.retries += 1
+            log(ctx, 'info', `来源校验打回第 ${state.retries} 次：${verdict.reason}`)
+            if (config.diagnostics !== false) {
+              reportLoad({ event: 'censor-retry', turn: state.lastTurn, retries: state.retries, code: verdict.code, reason: verdict.reason })
+            }
+            agent?.steer?.(correction)
+          } else {
+            log(ctx, 'warn', `检出「${verdict.reason}」，但缺少 createUserMessage，无法打回`)
+          }
         }
       } else if (verdict.action === 'giveup') {
+        if (config.diagnostics !== false) {
+          reportLoad({ event: 'censor-giveup', turn: state.lastTurn, code: verdict.code, reason: verdict.reason })
+        }
         log(ctx, 'warn', verdict.reason)
+      } else if (verdict.code !== 'non-objective' && verdict.code !== 'censor-off' && verdict.code !== 'fast-mode') {
+        // 本轮确实涉及客观信息、且判定合规 —— 记账说明"为什么放过"，
+        // 让"合法例外"与"漏判"在日志里分得开（可观测性）。
+        if (config.diagnostics !== false) {
+          reportLoad({ event: 'censor-skip', turn: state.lastTurn, code: verdict.code, reason: verdict.reason })
+        }
       }
 
       if (config.reinjectEvery > 0 && state.lastTurn > 0
@@ -399,6 +473,18 @@ export function applyTamer(ctx, rawConfig, api) {
       }
 
       syncMemory(agent, state)
+
+      // 状态快照（原子写，给人和未来的徽标一个稳定读取面；加载日志是追加式的）
+      if (config.stateSnapshot !== false) {
+        writeSnapshot({
+          mode: state.mode,
+          cwd: cwdOf(agent),
+          turn: state.lastTurn,
+          lastCensor: { action: verdict.action, code: verdict.code },
+          lastFinalize: state.lastFinalize,
+          pendingWarning: state.pendingWarning,
+        })
+      }
     } catch (error) {
       log(ctx, 'warn', `轮次收尾处理失败：${String(error)}`)
     }
@@ -473,12 +559,101 @@ export function applyTamer(ctx, rawConfig, api) {
         saveFile: args.save_file,
         copyFiles: config.archiveCopyFiles,
       })
+      // 归档成功即视为本轮的"来源合规凭据"：evaluateCensor / evaluateFinalize 都看这个计数
+      const st = stateOf(exec?.agent, config)
+      if (st) st.archivedThisTurn += 1
       return result.path
+    },
+  }
+
+  // 开工自检工具（移植自 trae-tamer 的 tamer_preflight）：
+  // 由**模型自己语义声明**本轮是否涉及客观信息，而不是让客户端正则去猜每句话。
+  const preflightTool = {
+    name: 'tamer_preflight',
+    description: '开工自检：声明本轮是否涉及客观信息（硬件/芯片/标准规范/政策法规/行情价格/论文结论等），涉及则返回来源工作流指引。动手检索前调用；不涉及就不必调用。',
+    parameters: {
+      type: 'object',
+      properties: {
+        objective: { type: 'boolean', description: '本轮是否涉及客观信息（由你语义判断，不靠关键词）' },
+        task: { type: 'string', description: '一句话说明本轮任务' },
+      },
+      required: ['objective'],
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => [{ type: 'text', text: String(value) }],
+    },
+    async execute(args, exec) {
+      const st = stateOf(exec?.agent, config)
+      const objective = args?.objective === true
+      if (st) st.declaredObjective = objective
+      const { guidance } = runPreflight({ objective, task: args?.task ?? '', mode: st?.mode ?? config.mode })
+      // 开工声明记账：没有它就无法统计"模型是否守规矩先声明"（v0.2.0 只有 finalize 有日志）
+      if (config.diagnostics !== false) {
+        reportLoad({
+          event: 'preflight',
+          objective,
+          task: String(args?.task ?? '').slice(0, 80),
+          mode: st?.mode ?? config.mode,
+          turn: st?.lastTurn ?? 0,
+        })
+      }
+      return guidance
+    },
+  }
+
+  // 交付自检工具（移植自 trae-tamer 的 tamer_finalize）：
+  // 在**发出最终回复之前**自检，只多一步工具调用，不重跑整轮、不静默改写。
+  const finalizeTool = {
+    name: 'tamer_finalize',
+    description: '交付自检：把即将发出的回复全文交上来，校验来源合规并返回 pass/skip/warn。warn 时必须补齐来源或写明「未找到可靠来源」后重新调用，不许带 warn 收尾。',
+    parameters: {
+      type: 'object',
+      properties: {
+        reply_text: { type: 'string', description: '即将发出的回复全文（用于判定是否已给出来源）' },
+        said_not_found: { type: 'boolean', description: '是否已在回复中写明「未找到可靠来源」' },
+      },
+      required: ['reply_text'],
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => [{ type: 'text', text: String(value) }],
+    },
+    async execute(args, exec) {
+      const st = stateOf(exec?.agent, config)
+      if (st && args?.said_not_found === true) st.saidNotFound = true
+      const result = evaluateFinalize({
+        // 三态直传：undefined = 本轮尚未 preflight（v0.3.0 修掉的"假通过"关键）
+        declaredObjective: st?.declaredObjective,
+        archivedCount: st?.archivedThisTurn ?? 0,
+        replyText: String(args?.reply_text ?? ''),
+        saidNotFound: args?.said_not_found === true || st?.saidNotFound === true,
+        mode: st?.mode ?? config.mode,
+      })
+      if (st) {
+        st.lastFinalize = { status: result.status, code: result.code }
+        st.pendingWarning = result.status === 'warn' ? `${result.code}: ${result.reason}` : null
+      }
+      if (config.diagnostics !== false) {
+        reportLoad({ event: 'finalize', status: result.status, code: result.code, turn: st?.lastTurn ?? 0 })
+      }
+      if (config.stateSnapshot !== false && st) {
+        writeSnapshot({
+          mode: st.mode,
+          cwd: cwdOf(exec?.agent),
+          turn: st.lastTurn,
+          lastFinalize: st.lastFinalize,
+          pendingWarning: st.pendingWarning,
+        })
+      }
+      return `【${result.status}】${result.reason}${result.action ? `\n下一步：${result.action}` : ''}`
     },
   }
 
   ctx.inject(['tools'], (scope) => {
     scope.tools.register(archiveTool)
+    scope.tools.register(preflightTool)
+    scope.tools.register(finalizeTool)
   })
 
   // 装配完成的自检记录：与 index.js 的 apply 行配对，证明整个装配真的跑完了
@@ -490,8 +665,10 @@ export function applyTamer(ctx, rawConfig, api) {
       order: config.protocolOrder,
       command: 'tamer',
       tool: archiveTool.name,
+      tools: [archiveTool.name, preflightTool.name, finalizeTool.name].join(','),
       mode: config.mode,
       censor: config.censor,
+      censorAction: config.censorAction,
       execGate: config.execGate,
       reinjectEvery: config.reinjectEvery,
       // 消息工厂来源：host = 宿主 API；builtin = 内置等价实现（功能不降级）

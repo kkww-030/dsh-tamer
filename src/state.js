@@ -22,6 +22,19 @@ function freshState(config) {
     assistantText: '',
     /** 本轮是否调用过“查来源”的工具 */
     sourceToolUsed: false,
+    /** 本轮模型是否显式声明过"涉及客观信息"（tamer_preflight）。
+     *  三态：undefined = 尚未声明；true/false = 显式声明（finalize 靠它区分"没声明"与"声明非客观"） */
+    declaredObjective: undefined,
+    /** 本轮已归档条数（tamer_archive 成功计数；>0 即视为来源合规） */
+    archivedThisTurn: 0,
+    /** 本轮模型是否声明过"查不到可靠来源" */
+    saidNotFound: false,
+    /** 最近一次交付自检结果（写状态快照用） */
+    lastFinalize: null,
+    /** 未消除的来源警示（finalize warn 时置上，下次 pass 清空） */
+    pendingWarning: null,
+    /** 是否已从工作区持久状态恢复过档位（只恢复一次） */
+    modeRestored: false,
     /** 已注入的记忆块哈希，用于变更时重新注入 */
     memoryHash: '',
     /** 是否已完成首次上下文注入（记忆 + 档位） */
@@ -52,4 +65,7 @@ export function beginTurn(state, userText) {
   state.userText = userText ?? ''
   state.assistantText = ''
   state.sourceToolUsed = false
+  state.declaredObjective = undefined
+  state.archivedThisTurn = 0
+  state.saidNotFound = false
 }

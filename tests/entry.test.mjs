@@ -61,7 +61,7 @@ test('可选宿主 API 无法解析时，apply 仍然成功并完成装配（降
   assert.equal(registered.sections[0].name, 'tamer:protocol')
   assert.equal(registered.sections[0].interpolate, false)
   assert.equal(registered.commands.length, 1)
-  assert.equal(registered.tools.length, 1)
+  assert.equal(registered.tools.length, 3)
   assert.equal(listeners.get('agent/turn-stopping')?.length, 1)
 
   // 加载自检日志必须留下"为什么没走宿主实现"的原文——桌面版没有控制台日志，

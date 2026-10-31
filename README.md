@@ -40,7 +40,7 @@ absolute local path (`ui-plugin-manager/README.md:46,53`); a local directory is 
 `pnpm-missing`). Installed here at user level:
 
 ```powershell
-npm i -g pnpm     # installs into the per-user npm global directory under %USERPROFILE%; Node install untouched
+npm i -g pnpm     # -> 用户级 npm 全局目录下的 pnpm.cmd, Node install untouched
 ```
 
 This plugin has **no dependencies and no lifecycle scripts**, so no build-script approval is asked.
